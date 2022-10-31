@@ -46,8 +46,9 @@ type Job struct {
 }
 
 type JobSpec struct {
-	Type string `json:"type"`
-	Job  string `json:"job"`
+	Type    string `json:"type"`
+	Job     string `json:"job"`
+	Cluster string `json:"cluster"`
 }
 
 type JobStatus struct {

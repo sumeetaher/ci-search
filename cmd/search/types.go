@@ -80,6 +80,9 @@ type Index struct {
 	// GroupByJob will batch results by the job and display data about match
 	// rate and failure rates.
 	GroupByJob bool
+
+	// BuildFarm will filter the graph/search only for the selected build farm
+	BuildFarm string
 }
 
 func (i *Index) Query() url.Values {
@@ -258,6 +261,14 @@ func parseRequest(req *http.Request, mode string, maxAge time.Duration) (*Index,
 		index.Context = num
 	} else if mode == "text" {
 		index.Context = 1
+	}
+
+	if value := req.FormValue("buildFarm"); len(value) > 0 {
+		index.BuildFarm = value
+	} else if value == "" {
+		index.BuildFarm = "all farms"
+	} else {
+		return nil, fmt.Errorf("build Farm string incorrect %s", value)
 	}
 
 	return index, nil

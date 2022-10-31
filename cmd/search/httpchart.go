@@ -174,6 +174,7 @@ var htmlChart = template.Must(template.New("chart").Funcs(map[string]interface{}
       var filter = '{{.index.IncludeName}}';
       var dateRange = {{.index.MaxAge.Seconds}};  // in seconds
       var searchType = '{{.index.SearchType}}';
+	  var buildFarm = '{{.index.BuildFarm}}';
 
       // {
       //   "regexp-pattern": {
@@ -436,7 +437,16 @@ var htmlChart = template.Must(template.New("chart").Funcs(map[string]interface{}
       function refetch(interval) {
         // Currently: Reason: CORS header ‘Access-Control-Allow-Origin’ missing
         // https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS/Errors/CORSMissingAllowOrigin
-        d3.json('jobs')
+        var searchParams = new URLSearchParams();
+        searchParams.append('name', filter);
+        searchParams.append('maxAge', dateRange + 's');  // chart is by start, but maxAge is by finish, so no need to expand this to handle drifting relative times.
+        searchParams.append('context', 0);
+        searchParams.append('type', searchType);
+		searchParams.append('buildFarm', buildFarm);
+        regexps.forEach((_, regexp) => {
+          searchParams.append('search', regexp);
+        });
+        d3.json('jobs?'+ searchParams)
           .then(data => {
             var now = new Date()
             data.items.forEach(job => {
@@ -480,6 +490,7 @@ var htmlChart = template.Must(template.New("chart").Funcs(map[string]interface{}
         searchParams.append('maxAge', dateRange + 's');  // chart is by start, but maxAge is by finish, so no need to expand this to handle drifting relative times.
         searchParams.append('context', 0);
         searchParams.append('type', searchType);
+		searchParams.append('buildFarm', buildFarm);
         regexps.forEach((_, regexp) => {
           searchParams.append('search', regexp);
         });

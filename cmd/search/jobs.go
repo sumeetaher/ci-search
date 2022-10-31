@@ -17,6 +17,15 @@ import (
 func (o *options) handleJobs(w http.ResponseWriter, req *http.Request) {
 	start := time.Now()
 	var success bool
+
+	var index *Index
+	var err error
+	index, err = parseRequest(req, "text", o.MaxAge)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Bad input: %v", err), http.StatusBadRequest)
+		return
+	}
+
 	defer func() {
 		klog.Infof("Render jobs duration=%s success=%t", time.Since(start).Truncate(time.Millisecond), success)
 	}()
@@ -27,13 +36,33 @@ func (o *options) handleJobs(w http.ResponseWriter, req *http.Request) {
 	}
 
 	jobs, err := o.jobAccessor.List(labels.Everything())
+	var filteredJobs []*prow.Job
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to load jobs: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	if index.BuildFarm != "all farms" && index.BuildFarm != "unknown" {
+		for _, job := range jobs {
+			if job.Spec.Cluster == index.BuildFarm {
+				filteredJobs = append(filteredJobs, job)
+			}
+		}
+	}
+	if index.BuildFarm == "unknown" {
+		for _, job := range jobs {
+			if job.Spec.Cluster == "" {
+				filteredJobs = append(filteredJobs, job)
+			}
+		}
+	}
+
+	if index.BuildFarm == "all farms" {
+		filteredJobs = jobs
+	}
 	// sort uncompleted -> newest completed -> oldest completed
-	sort.Slice(jobs, func(i, j int) bool {
-		iTime, jTime := jobs[i].Status.CompletionTime.Time, jobs[j].Status.CompletionTime.Time
+	sort.Slice(filteredJobs, func(i, j int) bool {
+		iTime, jTime := filteredJobs[i].Status.CompletionTime.Time, filteredJobs[j].Status.CompletionTime.Time
 		if iTime.Equal(jTime) {
 			return true
 		}
@@ -45,7 +74,7 @@ func (o *options) handleJobs(w http.ResponseWriter, req *http.Request) {
 		}
 		return jTime.Before(iTime)
 	})
-	list := prow.JobList{Items: jobs}
+	list := prow.JobList{Items: filteredJobs}
 	data, err := json.Marshal(list)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to write jobs: %v", err), http.StatusInternalServerError)

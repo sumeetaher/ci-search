@@ -158,6 +158,14 @@ func (o *options) handleIndex(w http.ResponseWriter, req *http.Request) {
 	writer := httpwriter.ForRequest(w, req)
 	defer writer.Close()
 
+	var buildFarmOptions []string
+	for _, buildFarm := range []string{"all farms", "default", "vsphere", "app.ci", "build01", "build02", "build03", "build04", "build05", "unknown"} {
+		var selected string
+		if buildFarm == index.BuildFarm {
+			selected = "selected"
+		}
+		buildFarmOptions = append(buildFarmOptions, fmt.Sprintf(`<option value="%s" %s>%s</option>`, template.HTMLEscapeString(buildFarm), selected, template.HTMLEscapeString(buildFarm)))
+	}
 	var wrapValue string
 	nowrapClass := "nowrap"
 	if index.WrapLines {
@@ -177,13 +185,13 @@ func (o *options) handleIndex(w http.ResponseWriter, req *http.Request) {
 		strconv.Itoa(index.MaxMatches),
 		strconv.FormatInt(index.MaxBytes, 10),
 		groupByOptions,
+		strings.Join(buildFarmOptions, ""),
 		wrapValue,
 	)
 
 	// display the empty results page
 	if len(index.Search[0]) == 0 {
 		stats := o.Stats()
-
 		fmt.Fprintf(writer, htmlEmptyPage, o.DeckURI, units.HumanSize(float64(stats.Size)), stats.Entries, stats.FailedJobs, stats.Jobs, stats.Bugs, stats.Issues)
 		flusher.Flush()
 
@@ -191,7 +199,7 @@ func (o *options) handleIndex(w http.ResponseWriter, req *http.Request) {
 		writer.Write(gw.
 			Var("data").
 			Series("", func(buf []byte) []byte {
-				for i, bucket := range stats.Buckets {
+				for i, bucket := range stats.BuildFarms[index.BuildFarm] {
 					if i > 0 {
 						buf = append(buf, ',')
 					}
@@ -200,7 +208,7 @@ func (o *options) handleIndex(w http.ResponseWriter, req *http.Request) {
 				return buf
 			}).
 			Series("", func(buf []byte) []byte {
-				for i, bucket := range stats.Buckets {
+				for i, bucket := range stats.BuildFarms[index.BuildFarm] {
 					if i > 0 {
 						buf = append(buf, ',')
 					}
@@ -209,7 +217,7 @@ func (o *options) handleIndex(w http.ResponseWriter, req *http.Request) {
 				return buf
 			}).
 			Series("", func(buf []byte) []byte {
-				for i, bucket := range stats.Buckets {
+				for i, bucket := range stats.BuildFarms[index.BuildFarm] {
 					if i > 0 {
 						buf = append(buf, ',')
 					}
@@ -222,6 +230,8 @@ func (o *options) handleIndex(w http.ResponseWriter, req *http.Request) {
 		fmt.Fprint(writer, htmlEmptyPageGraph)
 		fmt.Fprint(writer, htmlPageEnd)
 		return
+	} else {
+		o.updateUrlToJob()
 	}
 
 	// perform a search
@@ -270,7 +280,7 @@ func (o *options) handleIndex(w http.ResponseWriter, req *http.Request) {
 				}
 				fmt.Fprintf(bw, "<tr><td><a class=\"text-nowrap\" target=\"_blank\" href=\"%s\">#%s</a></td><td>%s</td><td class=\"text-nowrap\">%s</td><td class=\"col-12\">%s</td></tr>\n", template.HTMLEscapeString(issue.URI.String()), template.HTMLEscapeString(issue.Key), template.HTMLEscapeString(issue.Matches[0].FileType), template.HTMLEscapeString(age), template.HTMLEscapeString(name))
 				if index.Context >= 0 {
-					fmt.Fprintf(bw, "<tr class=\"row-match\"><td class=\"\" colspan=\"4\"><pre class=\"small\">")
+					fmt.Fprintf(bw, "<tr class=\"row-match\"><td class=\"\" colspan=\"5\"><pre class=\"small\">")
 					for _, match := range issue.Matches {
 						if err := renderLinesString(bw, match.Context, match.MoreLines); err != nil {
 							bw.Flush()
@@ -284,48 +294,55 @@ func (o *options) handleIndex(w http.ResponseWriter, req *http.Request) {
 				}
 			}
 			for _, job := range result.Jobs {
-				stats := o.jobAccessor.JobStats(job.Name, nil, start.Add(-index.MaxAge), start.Add(time.Hour))
-				var contents string
-				if stats.Count > 0 {
-					percentFail := math.Round(float64(stats.Failures) / float64(stats.Count) * 100)
-					title := fmt.Sprintf("%d runs, %d failures, %d matching runs", stats.Count, stats.Failures, len(job.Instances))
-					if stats.Failures == 0 {
-						percentMatch := math.Round(float64(len(job.Instances)) / float64(stats.Count) * 100)
-						contents = fmt.Sprintf(" - <em title=\"%s\">%d runs, %d%% failed, %d%% of runs match</em>", template.HTMLEscapeString(title), stats.Count, int(percentFail), int(percentMatch))
-					} else {
-						percentMatch := math.Round(float64(len(job.Instances)) / float64(stats.Failures) * 100)
-						percentImpact := math.Round(float64(len(job.Instances)) / float64(stats.Count) * 100)
-						contents = fmt.Sprintf(" - <em title=\"%s\">%d runs, %d%% failed, %d%% of failures match = %d%% impact</em>", template.HTMLEscapeString(title), stats.Count, int(percentFail), int(percentMatch), int(percentImpact))
+				urlToString := job.Instances[0].URI.String()
+				buildFarm := o.urlToJob[urlToString]
+				if buildFarm == "" {
+					buildFarm = "unknown"
+				}
+				if buildFarm == index.BuildFarm || index.BuildFarm == "all farms" {
+					stats := o.jobAccessor.JobStats(job.Name, nil, start.Add(-index.MaxAge), start.Add(time.Hour))
+					var contents string
+					if stats.Count > 0 {
+						percentFail := math.Round(float64(stats.Failures) / float64(stats.Count) * 100)
+						title := fmt.Sprintf("%d runs, %d failures, %d matching runs", stats.Count, stats.Failures, len(job.Instances))
+						if stats.Failures == 0 {
+							percentMatch := math.Round(float64(len(job.Instances)) / float64(stats.Count) * 100)
+							contents = fmt.Sprintf(" - <em title=\"%s\">%d runs, %d%% failed, %d%% of runs match</em>", template.HTMLEscapeString(title), stats.Count, int(percentFail), int(percentMatch))
+						} else {
+							percentMatch := math.Round(float64(len(job.Instances)) / float64(stats.Failures) * 100)
+							percentImpact := math.Round(float64(len(job.Instances)) / float64(stats.Count) * 100)
+							contents = fmt.Sprintf(" - <em title=\"%s\">%d runs, %d%% failed, %d%% of failures match = %d%% impact</em>", template.HTMLEscapeString(title), stats.Count, int(percentFail), int(percentMatch), int(percentImpact))
+						}
 					}
-				}
-				numRuns += len(job.Instances)
+					numRuns += len(job.Instances)
 
-				uri := *job.Instances[0].URI
-				if job.Trigger == "pull" {
-					uri.Path = path.Join("job-history", o.IndexBucket, "pr-logs", "directory", job.Name)
-				} else {
-					uri.Path = path.Join("job-history", o.IndexBucket, "logs", job.Name)
-				}
-				copied := *index
-				copied.MaxAge = o.MaxAge
-				copied.ExcludeName = ""
-				copied.IncludeName = fmt.Sprintf("^%s$", regexp.QuoteMeta(job.Name))
-				uriAll := url.URL{Path: "/", RawQuery: copied.Query().Encode()}
-				fmt.Fprintf(bw, "<tr><td colspan=\"4\"><a target=\"_blank\" href=\"%s\">%s</a> <a href=\"%s\">(all)</a>%s</td></tr>\n", template.HTMLEscapeString(uri.String()), template.HTMLEscapeString(job.Name), template.HTMLEscapeString(uriAll.String()), contents)
-				for _, instance := range job.Instances {
-					for _, match := range instance.Matches {
-						age, _ := formatAge(match.LastModified.Time, start, index.MaxAge)
-						fmt.Fprintf(bw, "<tr class=\"row-match\"><td><a target=\"_blank\" href=\"%s\">#%d</a></td><td>%s</td><td class=\"text-nowrap\">%s</td><td class=\"col-12\"></td></tr>\n", template.HTMLEscapeString(instance.URI.String()), instance.Number, template.HTMLEscapeString(match.FileType), template.HTMLEscapeString(age))
-						if index.Context >= 0 {
-							fmt.Fprintf(bw, "<tr class=\"row-match\"><td class=\"\" colspan=\"4\"><pre class=\"small\">")
-							if err := renderLinesString(bw, match.Context, match.MoreLines); err != nil {
-								bw.Flush()
-								klog.Errorf("Search %q failed with %d matches: command failed: %v", index.Search[0], numRuns, err)
-								fmt.Fprintf(writer, `<p class="alert alert-danger">error: %s</p>`, template.HTMLEscapeString(err.Error()))
-								fmt.Fprint(writer, htmlPageEnd)
-								return
+					uri := *job.Instances[0].URI
+					if job.Trigger == "pull" {
+						uri.Path = path.Join("job-history", o.IndexBucket, "pr-logs", "directory", job.Name)
+					} else {
+						uri.Path = path.Join("job-history", o.IndexBucket, "logs", job.Name)
+					}
+					copied := *index
+					copied.MaxAge = o.MaxAge
+					copied.ExcludeName = ""
+					copied.IncludeName = fmt.Sprintf("^%s$", regexp.QuoteMeta(job.Name))
+					uriAll := url.URL{Path: "/", RawQuery: copied.Query().Encode()}
+					fmt.Fprintf(bw, "<tr><td colspan=\"5\"><a target=\"_blank\" href=\"%s\">%s</a> <a href=\"%s\">(all)</a>%s</td></tr>\n", template.HTMLEscapeString(uri.String()), template.HTMLEscapeString(job.Name), template.HTMLEscapeString(uriAll.String()), contents)
+					for _, instance := range job.Instances {
+						for _, match := range instance.Matches {
+							age, _ := formatAge(match.LastModified.Time, start, index.MaxAge)
+							fmt.Fprintf(bw, "<tr class=\"row-match\"><td><a target=\"_blank\" href=\"%s\">#%d</a></td><td>%s</td><td>%s</td><td class=\"text-nowrap\">%s</td><td class=\"col-12\"></td></tr>\n", template.HTMLEscapeString(instance.URI.String()), instance.Number, template.HTMLEscapeString(match.FileType), template.HTMLEscapeString(buildFarm), template.HTMLEscapeString(age))
+							if index.Context >= 0 {
+								fmt.Fprintf(bw, "<tr class=\"row-match\"><td class=\"\" colspan=\"5\"><pre class=\"small\">")
+								if err := renderLinesString(bw, match.Context, match.MoreLines); err != nil {
+									bw.Flush()
+									klog.Errorf("Search %q failed with %d matches: command failed: %v", index.Search[0], numRuns, err)
+									fmt.Fprintf(writer, `<p class="alert alert-danger">error: %s</p>`, template.HTMLEscapeString(err.Error()))
+									fmt.Fprint(writer, htmlPageEnd)
+									return
+								}
+								fmt.Fprintln(bw, "</pre></td></tr>")
 							}
-							fmt.Fprintln(bw, "</pre></td></tr>")
 						}
 					}
 				}
@@ -678,7 +695,8 @@ const htmlIndexForm = `
 		<input title="The number of matches per job / file to show" autocomplete="off" class="form-control col-1" name="maxMatches" value="%s" placeholder="Max matches per job or bug">
 		<input title="The maximum number of bytes for the response" autocomplete="off" class="form-control col-1" name="maxBytes" value="%s" placeholder="Max bytes to return">
 		<select title="Group results by job (with stats) or no grouping" name="groupBy" class="form-control custom-select col-1" onchange="this.form.submit();">%s</select>
-		<div class="input-group-append"><span class="input-group-text">
+		<select title="number of matches to show for a particular build farm" name="buildFarm" class="form-control custom-select col-1" onchange="this.form.submit();">%s</select>	
+	<div class="input-group-append"><span class="input-group-text">
 			<input id="wrap" type="checkbox" name="wrap" %s onchange="document.getElementById('results').classList.toggle('nowrap')">
 			<label for="wrap" style="margin-bottom: 0; margin-left: 0.4em;">Wrap lines</label>
 		</span></div>

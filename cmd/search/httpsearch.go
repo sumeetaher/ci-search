@@ -42,6 +42,23 @@ func (o *options) handleSearch(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	if index.BuildFarm != "all farms" && index.BuildFarm != "unknown" {
+		for url := range result {
+			a := o.urlToJob[url]
+			fmt.Println(a)
+			if o.urlToJob[url] != index.BuildFarm {
+				delete(result, url)
+			}
+		}
+	}
+	if index.BuildFarm == "unknown" {
+		for url := range result {
+			if o.urlToJob[url] != "" {
+				delete(result, url)
+			}
+		}
+	}
+
 	data, err := json.Marshal(result)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Unable to serialize result: %v", err), http.StatusInternalServerError)
@@ -142,6 +159,11 @@ func (o *options) searchResult(ctx context.Context, index *Index) (map[string]ma
 			return nil
 		}
 		uri := metadata.URI.String()
+
+		if !(o.urlToJob[uri] == index.BuildFarm || index.BuildFarm == "all farms" || (index.BuildFarm == "unknown" && o.urlToJob[uri] == "")) {
+			return nil
+		}
+
 		_, ok := result[uri]
 		if !ok {
 			result[uri] = make(map[string][]*Match, 1)

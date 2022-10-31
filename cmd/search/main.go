@@ -135,6 +135,7 @@ type options struct {
 	jobAccessor  prow.JobAccessor
 	jobsPath     string
 	jobURIPrefix *url.URL
+	urlToJob     map[string]string
 
 	bugs         *bugzilla.CommentStore
 	bugsPath     string
@@ -151,6 +152,8 @@ type IndexStats struct {
 	Issues int
 
 	Entries int
+
+	BuildFarms map[string][]JobCountBucket
 
 	Jobs       int
 	FailedJobs int
@@ -175,9 +178,12 @@ func (o *options) Stats() IndexStats {
 	var totalJobs, failedJobs int
 	jobs, _ := o.jobAccessor.List(labels.Everything())
 	var buckets []JobCountBucket
+	var farmBuckets map[string][]JobCountBucket
+	o.urlToJob = make(map[string]string)
 	if len(jobs) > 1 {
 		var min, max int64 = math.MaxInt64, 0
 		for _, job := range jobs {
+			o.urlToJob[job.Status.URL] = job.Spec.Cluster
 			t := job.Status.CompletionTime.Time.Unix()
 			if t <= 0 {
 				t = job.Status.StartTime.Time.Unix()
@@ -195,10 +201,22 @@ func (o *options) Stats() IndexStats {
 		begin := time.Unix(min, 0).Truncate(time.Hour).Unix()
 		bins := (max-begin)/3600 + 1
 		buckets = make([]JobCountBucket, bins)
+		farmBuckets = make(map[string][]JobCountBucket)
+		allFarms := "all farms"
+		farmBuckets[allFarms] = buckets
 		for i := range buckets {
 			buckets[i].T = begin + int64(i)*3600
 		}
 		for _, job := range jobs {
+			farm := job.Spec.Cluster
+			if farm == "" {
+				farm = "unknown"
+			}
+			if _, ok := farmBuckets[farm]; !ok {
+				copyBuckets := make([]JobCountBucket, bins)
+				copy(copyBuckets, buckets)
+				farmBuckets[farm] = copyBuckets
+			}
 			failed := job.Status.State != "success"
 			totalJobs++
 			if failed {
@@ -212,9 +230,13 @@ func (o *options) Stats() IndexStats {
 				continue
 			}
 			i := (t - begin) / 3600
+			farmBuckets[allFarms][i].Jobs++
+			farmBuckets[farm][i].Jobs++
 			buckets[i].Jobs++
 			if failed {
 				buckets[i].FailedJobs++
+				farmBuckets[allFarms][i].FailedJobs++
+				farmBuckets[farm][i].FailedJobs++
 			}
 		}
 	} else {
@@ -230,9 +252,20 @@ func (o *options) Stats() IndexStats {
 		Size:       j.Size,
 		Bugs:       b.Bugs,
 		Issues:     is.Issues,
+		BuildFarms: farmBuckets,
 		Jobs:       totalJobs,
 		FailedJobs: failedJobs,
 		Buckets:    buckets,
+	}
+}
+
+// Stats returns aggregate statistics for the indexed paths.
+func (o *options) updateUrlToJob() {
+	jobs, _ := o.jobAccessor.List(labels.Everything())
+	for _, job := range jobs {
+		if _, ok := o.urlToJob[job.Status.URL]; !ok {
+			o.urlToJob[job.Status.URL] = job.Spec.Cluster
+		}
 	}
 }
 
